@@ -1,0 +1,3 @@
+-- Canonical schema lives in migrations.
+-- Apply: Database/migrations/001_initial_schema.sql
+-- (via Supabase SQL Editor — do not auto-run against production)
