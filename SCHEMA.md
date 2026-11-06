@@ -1,6 +1,6 @@
 # MedFlow — schema DB (Supabase PostgreSQL)
 
-**Migrations:** `001_initial_schema.sql` → `002_post_consultation_fixes.sql`  
+**Migrations:** `001_initial_schema.sql` → `002_post_consultation_fixes.sql` → `003_doctor_orchestration_state.sql`  
 Apply in order via Supabase SQL Editor. Do not re-edit applied migrations; add new ones.
 
 **Backend (current):** MedFlow-Backend is **Node.js + Express** and uses `SUPABASE_SECRET_KEY` (service role). That key **bypasses RLS**, so FastAPI/Express authorization checks are mandatory on every medical request. Intended long-term stack may include Python + FastAPI; the security rule is the same.
@@ -60,6 +60,7 @@ erDiagram
     uuid patient_id FK
     uuid doctor_id FK
     text status
+    jsonb doctor_orchestration_state "nullable (003)"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -164,6 +165,20 @@ Coordonare: dacă AI/Backend adoptă alte string-uri, actualizați CHECK-ul înt
 ### `proposed_options`
 
 Păstrat din 001 ca **legacy / optional**. Workflow-ul post-consultație **nu** cere 3 propuneri de diagnostic. Câmpurile noi de sumar/draft acoperă MVP-ul.
+
+### `cases.doctor_orchestration_state` (003)
+
+Starea orchestratorului AI pentru medic (`DoctorOrchestrator` din MedFlow-AI), păstrată între request-uri HTTP.
+Fiecare rundă de clarificare e un request separat la `POST /cases/:id/analysis`, deci contorul de runde trebuie salvat în DB.
+
+| Valoare | Înseamnă |
+|---------|----------|
+| `NULL` | Nu s-a cerut încă nicio analiză AI pentru caz (runda 0) |
+| `{"sessionId": "<case id>", "roundCount": 0..2, "lastAnalysis": {...}}` | Analiza e în curs; `lastAnalysis` = ultimul răspuns AI (pe date **scrubbed**) |
+
+- CHECK: dacă nu e `NULL`, trebuie să fie obiect JSON (`jsonb_typeof = 'object'`).
+- Scrisă/citită **doar** de Backend (`src/orchestrationStateStore.ts`), cu cheia service_role.
+- **Nu** se trimite pacientului: `GET /cases/:id` nu selectează coloana.
 
 ## medical_documents (upload metadata)
 

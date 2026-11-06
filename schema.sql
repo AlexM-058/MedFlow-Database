@@ -1,4 +1,5 @@
 -- Canonical schema lives in migrations (apply in order):
 --   migrations/001_initial_schema.sql
 --   migrations/002_post_consultation_fixes.sql
+--   migrations/003_doctor_orchestration_state.sql
 -- via Supabase SQL Editor — do not auto-run against production.
