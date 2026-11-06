@@ -1,6 +1,6 @@
 # MedFlow — schema DB (Supabase PostgreSQL)
 
-**Migrations:** `001_initial_schema.sql` → `002_post_consultation_fixes.sql` → `003_doctor_orchestration_state.sql`  
+**Migrations:** `001_initial_schema.sql` → `002_post_consultation_fixes.sql` → `003_doctor_orchestration_state.sql` → `004_auth_connections.sql` → `005_auth_code_validation.sql` → `006_auth_lock_order.sql`  
 Apply in order via Supabase SQL Editor. Do not re-edit applied migrations; add new ones.
 
 **Backend (current):** MedFlow-Backend is **Node.js + Express** and uses `SUPABASE_SECRET_KEY` (service role). That key **bypasses RLS**, so FastAPI/Express authorization checks are mandatory on every medical request. Intended long-term stack may include Python + FastAPI; the security rule is the same.
@@ -208,6 +208,80 @@ Hardening viitor (opțional): trigger/CHECK pe rol — **nu** în MVP 24h.
 Cheia secretă Supabase bypass RLS → **nu sări** peste autorizarea din Backend.
 
 ## Securitate
+
+### Google identity and doctor connections (004)
+
+Migration 004 adds four tables without changing existing medical records:
+
+| Table | Responsibility |
+| --- | --- |
+| `doctor_details` | Operator-approved specialty and clinic for a doctor profile |
+| `doctor_invitations` | Normalized exact email, professional details, SHA-256 token hash, seven-day expiry, revocation and single-user consumption |
+| `doctor_connection_codes` | One current 32-byte random hex code per doctor; rotation replaces it atomically |
+| `connection_requests` | Separate `pending`, `accepted`, `rejected`, `cancelled` requests; one pending request per doctor/patient pair |
+
+These tables have enabled and forced RLS, no policies or direct grants for
+`anon`/`authenticated`, and service-role grants for trusted administration.
+Existing medical table grants stay unchanged. Apply migration 004 as the Supabase
+migration owner (`postgres`); its narrowly granted `SECURITY DEFINER` functions
+use an empty search path and fully qualified application relations.
+
+Account API calls use the user's JWT, not a service-role key. PostgreSQL derives
+the identity from `auth.uid()`, checks confirmed `auth.users.email` plus a Google
+identity in `auth.identities`, and provisions a patient using insert-on-conflict.
+User metadata is display-only and cannot choose a role. Existing profiles are
+preserved. Only consuming a matching operator-created invitation promotes the
+same profile to doctor; professional details come from that invitation.
+
+| RPC | Execute grant | JSON response |
+| --- | --- | --- |
+| `medflow_get_me()` | authenticated | `{profile}` |
+| `medflow_accept_doctor_invitation(p_token text)` | authenticated | `{profile}` |
+| `medflow_preview_doctor(p_code text)` | anon, authenticated | `{doctor}`; professional information only |
+| `medflow_list_connection_requests()` | authenticated | `{requests}`; caller's role and participation filter |
+| `medflow_request_connection(p_code text)` | authenticated patient | `{request, created}`; backend removes internal creation marker |
+| `medflow_update_connection(p_id uuid, p_action text)` | authenticated participant | `{request}` |
+| `medflow_get_connection_code()` | authenticated doctor | `{connectionCode: {code}}` |
+| `medflow_rotate_connection_code()` | authenticated doctor | `{connectionCode: {code}}` |
+| `medflow_create_doctor_invitation(p_email text, p_full_name text, p_specialty text, p_clinic text, p_token_hash text)` | service_role only | `{id, expiresAt}` |
+| `medflow_revoke_doctor_invitation(p_id uuid)` | service_role only | `{id, revoked}` |
+
+The backend adds connection/invitation URLs using trusted deployment settings.
+The operator generates the raw invitation token; only its lowercase hex SHA-256
+hash reaches the database. Email comparison trims and lowercases; it never
+rewrites Gmail dots or plus aliases. Same-user acceptance retries return the
+already promoted doctor profile even after expiry, unless revoked. Revoking an
+invitation blocks further acceptance; it does not demote an existing doctor.
+
+Request creation never creates an assignment. The doctor-only acceptance RPC
+creates the active assignment and changes request status in one transaction.
+Row locks serialize transitions, a pair advisory transaction lock and partial
+unique index serialize duplicate submissions, and a shared code-row lock makes
+request creation atomic relative to rotation. Existing active pairs return an
+accepted request idempotently; legacy pairs gain a request record without a new
+assignment. Explicit new POSTs may follow rejection/cancellation. Another
+doctor's assignments remain active. Rotation leaves requests and assignments
+unchanged.
+
+The three internal helper RPCs have no browser or service-role execution grants.
+All public RPC errors use SQLSTATE `P0001` and a fixed machine code for backend
+mapping; SQL details and tokens must not be forwarded to clients.
+
+Migration 005 fixes PostgreSQL's regex repetition limit while preserving the
+16–256 character opaque-token contract and all function execution grants.
+Length bounds are checked separately from the URL-safe character allowlist.
+
+Migration 006 uses `FOR NO KEY UPDATE` for account serialization so assignment
+foreign-key checks remain compatible with QR rotation. Acceptance locks the
+target patient's role `FOR SHARE` before locking the request, serializing against
+invitation promotion without cycling against patient cancellation. Role filtering
+avoids taking another doctor's profile lock for a stale patient request.
+
+Run `migrations/verify_004_checks.sql` after applying 004–006. It creates only random
+synthetic accounts with `example.invalid` emails, tests permission boundaries,
+verified identity, invitations, requests, rotation and multi-doctor behavior,
+then rolls back all fixtures. Separate concurrent sessions are required to test
+actual lock waiting; the rollback script explains that limitation.
 
 - RLS ON (+ FORCE) pe tabelele medicale (din 001); coloanele noi moștenesc RLS la nivel de tabel.
 - Fără politici publice medicale; `REVOKE` pe `anon`/`authenticated`; `GRANT` pe `service_role`.
