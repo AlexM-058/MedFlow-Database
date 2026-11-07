@@ -81,6 +81,9 @@ erDiagram
     text mime_type
     bigint size_bytes
     jsonb extracted_data
+    jsonb review
+    uuid reviewed_by FK
+    timestamptz reviewed_at
     timestamptz created_at
   }
 
@@ -188,6 +191,9 @@ Fiecare rundă de clarificare e un request separat la `POST /cases/:id/analysis`
 | `mime_type` | Tipul fișierului original (MVP MIME-uri de mai sus) |
 | `size_bytes` | Dimensiune ≥ 0; nullable pe legacy |
 | `uploaded_by` | FK → `profiles.id`; rolul = `profiles.role` |
+| `extracted_data` | Ce a citit serviciul de extragere (neschimbat după verificare); poate conține greșeli de citire |
+| `review` | (migrarea 008) Verificarea pacientului: `{fields, medications}`; `NULL` = neverificat. Doar medicamentele din documente verificate intră în „Tratament activ” |
+| `reviewed_by` / `reviewed_at` | (008) pacientul care a verificat și momentul |
 
 Backend **trebuie** să populeze metadata la fiecare upload nou și să verifice că uploader-ul are acces la caz (pacientul cazului sau medicul asignat).  
 Stocarea fișierelor / OCR nu fac parte din schema DB MVP.
